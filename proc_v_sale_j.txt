@@ -1,0 +1,53 @@
+输入参数：IN `vname` varchar(64),IN `begindate` date,IN `enddate` date
+
+label:BEGIN
+	declare tables	varchar(1024); 
+  declare subTableName varchar(32);  
+  declare i int;
+
+  set @sql=concat('drop table if exists ',vname);
+  PREPARE stmt from @sql;
+  execute stmt;
+  deallocate prepare stmt;
+
+  drop table if exists tablename;
+
+  call catchname(begindate,enddate,'tb_sell_waste_all',tables);
+  create temporary table tablename(
+    select tables as tablesname
+  );
+
+ #建立视图语句
+  set @sql=concat('create table ',vname); 
+  loop_1:loop      
+    select instr(tablesname,',') into i from tablename; 
+    if i=0 then
+	   select tablesname into subTableName from tablename; 
+	   set @sql=concat(@sql, '  (select  b.shopid_hb as shopid,date_format(selldate,''%Y-%m-%d'') as sdate,class as cgid,posid  , Receipt as listno, code as goodsid  ,
+	             sum(amount) as qty,sum(sum_sell+sum_disc) as salevalue,sum(sum_disc) as discvalue, 1 as x,price  from ' 
+	         ,ltrim(rtrim(subTableName))
+	         , ' a join v_zn_md_yt_ywq b on a.organ=b.shopid where convert(date_format(selldate,''%Y-%m-%d''),char(10)) between ''' 
+             , convert(begindate,char(10))  
+             , ''' and ''' 
+             , convert(enddate,char(10)) 
+             ,'''  and state=1  and class not in(20, 21, 22, 23, 24, 25, 26, 27, 28) group by b.shopid_hb  ,date_format(selldate,''%Y-%m-%d'') ,class,posid  , Receipt  , code  ,price );');    
+      leave loop_1;      
+      else          
+          select substring(tablesname,1,instr(tablesname,',')-1) into subTableName from tablename;
+           set @sql =concat(@sql , '  (select  b.shopid_hb as shopid,date_format(selldate,''%Y-%m-%d'') as sdate,class as cgid,posid  , Receipt as listno, code as goodsid  ,
+	             sum(amount) as qty,sum(sum_sell+sum_disc) as salevalue,sum(sum_disc) as discvalue, 1 as x,price  from ' 
+	         , ltrim(rtrim(subTableName))
+	         , ' a join v_zn_md_yt_ywq b on a.organ=b.shopid where convert(date_format(selldate,''%Y-%m-%d''),char(10)) between ''' 
+             , convert(begindate,char(10)) 
+             , ''' and ''' 
+             , convert(enddate,char(10)) 
+             , '''  and state=1 and class not in(20, 21, 22, 23, 24, 25, 26, 27, 28) group by b.shopid_hb  ,date_format(selldate,''%Y-%m-%d'')  ,class ,posid  , Receipt  , code  ,price)  union '); 
+        update tablename  set tablesname=substring(tablesname,instr(tablesname,',')+1,length(tablesname));  
+    end if;
+  end loop; 
+  PREPARE stmt from @sql;
+  execute stmt;
+  deallocate prepare stmt;
+
+
+END

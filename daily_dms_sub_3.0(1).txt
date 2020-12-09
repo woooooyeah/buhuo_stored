@@ -1,0 +1,67 @@
+BEGIN
+DROP TABLE IF EXISTS tmptable_everyday_1_1;
+CREATE TABLE tmptable_everyday_1_1 AS
+SELECT sdate,shopid,goodsid,SUM(amount)AS amount,SUM(salevalue)AS salevalue,
+salevalue/amount as average_price,
+ floor(salevalue/amount /(SELECT v_goodsshop.normalprice 
+FROM v_goodsshop where pos_2w.shopid=v_goodsshop.shopid 
+and pos_2w.goodsid=v_goodsshop.goodsid )*20)/20 as zkb
+FROM pos_2w WHERE v_goodsshop.shopid=shopId AND sdate=thisDay
+GROUP BY sdate, shopid, goodsid;
+
+
+
+##################
+DROP TABLE IF EXISTS tmptable_everyday_2_1;
+CREATE TABLE tmptable_everyday_2_1 AS
+SELECT tmptable_everyday_1_1.shopid AS shopid, tmptable_everyday_1_1.goodsid AS goodsid,
+tmptable_everyday_1_1.zkb AS zkb,SUM(tmptable_everyday_1_1.amount) AS amount ,
+SUM(tmptable_everyday_1_1.salevalue) AS salevalue,
+salevalue/amount AS average_price,
+amount/count(tmptable_everyday_1_1.amount) AS dms 
+FROM tmptable_everyday_1_1
+GROUP BY  tmptable_everyday_1_1.shopid, tmptable_everyday_1_1.goodsid,tmptable_everyday_1_1.zkb;
+
+
+
+REPLACE INTO zn_price_dms(shopid,xlid,goodsid,normalprice,band1,band2,disc1,disc2,trueprice,dms,sdate)
+SELECT shopid,goodsid,(SELECT deptid FROM v_goods WHERE zn_price_dms.goodsid=v_goods.goodsid)as xlid,
+(SELECT `price` 
+FROM tb_comm_shop where shopid=tb_comm_shop.organ 
+and goodsid=tb_comm_shop.`code`)AS normalprice,
+zkb AS disc1,zkb+0.05 AS disc2,zkb*normalprice AS band1,
+disc2*normalprice AS band2,average_price AS trueprice,dms
+FROM tmptable_everyday_2_1;
+
+
+#c.根据zn_price_dms表更新zn_xl_dms
+DROP TABLE IF EXISTS tmp_everyday_xl;
+CREATE TABLE tmp_everyday_xl
+SELECT 
+zn_price_dms.shopid AS shopid,
+zn_price_dms.xlid AS xlid,
+zn_price_dms.disc1 AS disc1,
+zn_price_dms.disc2 AS disc2,
+SUM(zn_price_dms.dms) AS dms,
+SUM(zn_price_dms.dms)/COUNT(zn_price_dms.dms) AS dms_disc,
+0.0 AS dms_ori 
+FROM zn_price_dms
+GROUP BY zn_price_dms.shopid,zn_price_dms.xlid,zn_price_dms.disc1,zn_price_dms.disc2;
+
+
+#########mds_ori 小类在原价销售时单品的日均销量/小类单品数????
+UPDATE tmp_everyday_xl a
+SET a.dms_ori=(SELECT dms_disc FROM tmp_everyday_xl b WHERE 
+a.xlid=b.xlid AND
+a.shopid=b.shopid AND 
+b.disc2>0.99);
+
+REPLACE INTO zn_xl_dms(shopid,xlid,dsic1,disc2,dms_ori)
+SELECT shopid,xlid,dsic1,disc2,dms_ori
+FROM tmp_everyday_xl;
+
+
+DROP TABLE IF EXISTS tmp_everyday_xl;
+
+
+END

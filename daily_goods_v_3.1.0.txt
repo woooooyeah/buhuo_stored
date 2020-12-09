@@ -1,0 +1,118 @@
+BEGIN
+# 定义当前时间
+DECLARE today date;
+#春节开始结束日期
+DECLARE springfestivalbegin date;
+DECLARE springfestivalend date;
+DECLARE chuyi date;
+
+
+SET today=thisDay;
+SET springfestivalbegin=DATE_SUB(
+(SELECT zn_calendar.startdate FROM zn_calendar WHERE holidayid='01' AND DATE_FORMAT(zn_calendar.startdate,'%Y')=YEAR(today)),
+INTERVAL 6 DAY);
+SET chuyi=
+(SELECT zn_calendar.sundatedate FROM zn_calendar WHERE holidayid='01' AND DATE_FORMAT(zn_calendar.startdate,'%Y')=YEAR(today));
+
+#将v_goods和v_zn_goodsshop 转成表
+#DROP TABLE IF EXISTS tmp_everyday_v_goods;
+#CREATE TABLE tmp_everyday_v_goods
+#SELECT * FROM v_goods;
+#DROP TABLE IF EXISTS tmp_everyday_v_zn_goodsshop;
+#CREATE TABLE tmp_everyday_v_zn_goodsshop
+#SELECT * FROM v_zn_goodsshop;
+
+
+
+# b 生成zn_goods基础数据：shopid、Xlid、Goodsid、Normalprice：
+# 源表有v_goodsshop、v_goods。v_goodsshop中flag=0（状态正常）
+# 并且stocktype=0(管库存)的商品进入此表并对T类商品进行标注
+# （classtype=’T’），除T类外默认为C类。
+TRUNCATE zn_goods;
+INSERT INTO zn_goods (shopid,xlid,goodsid,classtype,normalprice,flag,sdate)
+SELECT
+`v_zn_goodsshop`.`shopid` AS `shopid`,
+`v_goods`.`deptid` AS `xlid`,
+`v_zn_goodsshop`.`goodsid` AS `goodsid`,
+'C' AS `classtype`,
+`v_zn_goodsshop`.`normalprice` AS  `normalprice`,
+'0' AS `flag`,
+ @today AS `sdate`
+FROM 
+`v_zn_goodsshop`,`v_goods`
+WHERE
+(v_zn_goodsshop.shopid=shopId) AND
+ ((`v_zn_goodsshop`.`goodsid` = `v_goods`.`goodsid`)AND
+(`v_goods`.`flag`=0) AND (`v_zn_goodsshop`.`stocktype`=0));
+
+
+##############10min#############
+#c 更新zn_goods表Minstock、minorder字段
+UPDATE zn_goods,v_minorder
+SET `zn_goods`.`minorder`=v_minorder.minorderqty,
+`zn_goods`.`minstock`=v_minorder.minstockqty
+WHERE 
+v_minorder.shopid=shopId AND zn_goods.shopid=shopId AND
+v_minorder.goodsid=zn_goods.goodsid;
+
+#d 用v_pos_2w数据更新ABC分类并更新zn_goods表的classtype,更新sdate
+UPDATE zn_goods a,tb_classify b set a.classtype=b.classtype  
+WHERE a.shopid=shopId AND b.shopid=shopId AND a.goodsid=b.goodsid;
+
+
+#	e	更新zn_goods表的季节属性相关字段：只有在季节的时间段内需要
+#更新季节属性，时间段外为普通商品
+#源表zn_season_xl
+##############10min#############
+UPDATE zn_goods,zn_season_xl
+SET 
+zn_goods.seasontype=1,
+zn_goods.arrdate=zn_season_xl.arrdate,
+zn_goods.rate1=zn_season_xl.rate1,
+zn_goods.rate2=zn_season_xl.rate2,
+zn_goods.period1=zn_season_xl.period1,
+zn_goods.period2=zn_season_xl.period2
+WHERE zn_goods.xlid=zn_season_xl.xlid;
+
+
+#	f	更新zn_goods表的节日属性
+# 源表zn_calerdar和zn_holiday_goods
+#---F1:zn_holiday_goods表中的商品在手工补货起止时间范围内时zn_goods中直接更新flag=2  (人工补货)
+
+DROP TABLE IF EXISTS tmp_everyday_holiday1;
+CREATE TABLE tmp_everyday_holiday1 AS
+SELECT 
+zn_holiday_goods.goodsid AS goodsid,
+zn_holiday_goods.xlid AS xlid
+FROM zn_calendar,zn_holiday_goods WHERE zn_calendar.holidayid=zn_holiday_goods.holidayid AND
+zn_calendar.startdate<=today AND zn_calendar.enddate>today;
+ALTER TABLE tmp_everyday_holiday1 ADD INDEX index_1(goodsid);
+
+UPDATE zn_goods JOIN tmp_everyday_holiday1 x
+ON zn_goods.goodsid=x.goodsid
+SET zn_goods.flag=2;
+#---F2:当前日期>=(春节开始时间- 6天)至初一（sundate）之间并且商品不属于zn_holiday_goods表中春节专属商品时, 更新节日属性=2及起止时间，这期间陆续用春节指数补货。
+IF (today>=springfestivalbegin AND today<chuyi)THEN 
+		UPDATE zn_goods SET zn_goods.holidaytype=2,
+												zn_goods.holiday_begindate=springfestivalbegin,
+												zn_goods.holiday_enddate=chuyi
+										WHERE zn_goods.shopid=shopId AND zn_goods.goodsid NOT in 
+												(SELECT zn_holiday_goods.goodsid FROM zn_holiday_goods);
+END IF;
+
+
+
+# g.季节性商品首次补货后在到货之前暂不进行补货：
+#在zn_season_across表中并且当前日期<此表中的nextdate
+#(这个条件避免季节性商品首次补货后没有到货时重复订货的问题) 
+#,更新zn_goods表flag=3
+
+UPDATE zn_goods,zn_season_across 
+SET flag=3
+WHERE zn_season_across.goodsid=zn_goods.goodsid AND
+today<zn_season_across.nextdate;
+
+#h.处理zn_season_across表数据：当前日期大于表中季节开始日期的记录可删除
+	DELETE FROM zn_season_across WHERE zn_season_across.begindate<today;
+
+END

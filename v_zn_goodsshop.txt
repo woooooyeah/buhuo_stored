@@ -1,0 +1,77 @@
+SELECT
+	`b`.`shopid_hb` AS `shopid`,
+	`a`.`code` AS `goodsid`,
+	(
+		CASE
+		WHEN (`a`.`state` = 0) THEN
+			8
+		WHEN (`a`.`state` = 1) THEN
+			0
+		WHEN (`a`.`state` = 2) THEN
+			1
+		WHEN (`a`.`state` = 3) THEN
+			5
+		WHEN (`a`.`state` = 4) THEN
+			3
+		WHEN (`a`.`state` = 5) THEN
+			1
+		WHEN (`a`.`state` = 6) THEN
+			1
+		END
+	) AS `flag`,
+	(
+		CASE
+		WHEN (`a`.`state` = 0) THEN
+			'新品试销'
+		WHEN (`a`.`state` = 1) THEN
+			'正常'
+		WHEN (`a`.`state` = 2) THEN
+			'停止进货可销售'
+		WHEN (`a`.`state` = 3) THEN
+			'清退'
+		WHEN (`a`.`state` = 4) THEN
+			'撤柜'
+		WHEN (`a`.`state` = 5) THEN
+			'暂时禁下单'
+		WHEN (`a`.`state` = 6) THEN
+			'暂时缺货'
+		END
+	) AS `status`,
+	(
+		CASE
+		WHEN (`a`.`ifstock` = 0) THEN
+			1
+		WHEN (`a`.`ifstock` = 1) THEN
+			0
+		END
+	) AS `stocktype`,
+	(
+		CASE
+		WHEN (`a`.`ifstock` = 0) THEN
+			'不管库存'
+		WHEN (`a`.`ifstock` = 1) THEN
+			'管库存'
+		END
+	) AS `stocktypename`,
+	NULL AS `logistics`,
+	`a`.`price` AS `normalprice`,
+	`a`.`indate` AS `goodsdate`,
+	`a`.`deleted` AS `Deleted`
+FROM
+	(
+		`tb_comm_shop` `a`
+		JOIN `v_zn_md_yt_ywq` `b` ON ((`a`.`organ` = `b`.`shopid`))
+	)
+WHERE
+	(
+		(`a`.`state` IN(0, 1))
+		AND (`a`.`ifstock` = 1)
+	)
+GROUP BY
+	`b`.`shopid_hb`,
+	`a`.`code`,
+	`a`.`state`,
+	`a`.`ifstock`,
+	`a`.`price`,
+	`a`.`indate`,
+	`a`.`deleted`

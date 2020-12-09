@@ -1,0 +1,100 @@
+输入参数:IN `begindate` date,IN `enddate` date
+
+BEGIN
+
+	declare todaydate date;
+	set todaydate=begindate;
+
+  drop table if exists tmp_dayly_sales;
+  create table tmp_dayly_sales(
+		sdate date,
+		shopid varchar(8),
+    shopname varchar(64),
+		goodsid varchar(32),
+		goodsname varchar(64),
+		salevalue dec(16,2),
+		discvalue dec(16,2),
+		qty dec(16,3),
+		disc  dec(16,2),
+		zlprice dec(16,2),
+    normalprice dec(16,2)
+	);
+while todaydate<=enddate
+do
+		call proc_v_sale_j('v_sale_j_d',todaydate,todaydate);
+
+##计算日均销量
+		insert into tmp_dayly_sales
+		select sdate,shopid,cast(null as char(64)) as shopname,goodsid,cast(null as char(64)) as goodsname,sum(salevalue)-sum(discvalue) as salevalue,sum(discvalue) as discvalue,sum(qty) as qty,
+						IF(convert(sum(salevalue),DECIMAL(16,2))=0,0.00,(sum(salevalue)-sum(discvalue))/sum(salevalue)*100),0,0
+		from v_sale_j_d
+		group by sdate,shopid,goodsid;
+
+##计算主力价格
+	drop TEMPORARY table if exists tmp_sale_j;
+  create temporary table if not exists tmp_sale_j(
+		sdate date,
+		pos_list varchar(32),
+		shopid varchar(8),
+		goodsid varchar(16),
+		qty dec(16,3),
+		salevalue dec(16,2),
+		trueprice dec(16,2)
+	);
+  create index index_1 on tmp_sale_j(sdate,shopid,goodsid);
+
+  ##每天每张小票单品实际售价和数量
+  insert into tmp_sale_j
+  select sdate,concat(posid,'-',listno) as poslist,shopid,goodsid,sum(cast(qty as dec(16,3))/x) as qty,sum(salevalue) as salevalue,sum(salevalue-discvalue)/sum(cast(qty as dec(16,3))/x) as trueprice
+  from v_sale_j_d
+  where qty!=0
+  group by sdate,concat(posid,'-',listno),shopid,goodsid;
+
+  /*##将团购小票单独存入团购表中
+	insert into tuangou_data
+  select sdate,poslist,shopid,goodsid,qty,salevalue,trueprice
+  from tmp_sale_j
+	where salevalue>5000;*/
+  ##删除团购数据
+	delete from tmp_sale_j where salevalue>5000;
+
+	##单品每天每个实际售价的销售数量
+  drop TEMPORARY table if exists tmp_sale1;
+	create TEMPORARY table tmp_sale1(
+		select sdate,shopid,goodsid,trueprice,sum(qty) as qty
+		from tmp_sale_j
+		group by sdate, shopid,goodsid,trueprice 
+	);
+
+	##单品每天的最大销售数量
+  drop TEMPORARY table if exists  tmp_maxqty;
+  create TEMPORARY table tmp_maxqty(
+		select sdate,  shopid, goodsid,max(qty) as maxqty     
+		from tmp_sale1
+		group by sdate,  shopid, goodsid
+	);
+  create index index_1 on tmp_maxqty(sdate,shopid,goodsid);
+
+	##单品每天的最大销售数量 对应的实际售价为主力售价
+  delete a from tmp_sale1 a join tmp_maxqty b on a.sdate=b.sdate and a.shopid=b.shopid and a.goodsid=b.goodsid 
+  where a.qty!=b.maxqty;
+  drop TEMPORARY table if exists tmp_zlprice;
+	create TEMPORARY table tmp_zlprice(
+     select sdate,shopid,goodsid,max(trueprice) as zlprice
+		 from tmp_sale1
+		 group by sdate,shopid,goodsid
+	);
+  create index index_1 on tmp_zlprice(sdate,shopid,goodsid);
+
+	##主力售价回插
+	update tmp_dayly_sales a join tmp_zlprice b on a.sdate=b.sdate and a.shopid=b.shopid and a.goodsid=b.goodsid
+	set a.zlprice=b.zlprice;
+
+  set todaydate=DATE_ADD(todaydate,INTERVAL 1 day);
+end while;
+  create index index_1 on tmp_dayly_sales(sdate,shopid,goodsid);
+	update tmp_dayly_sales a join v_zn_goodsshop b on a.shopid=b.shopid and a.goodsid=b.goodsid
+	set a.normalprice=b.normalprice;
+  update tmp_dayly_sales a join v_zn_md_yt_ywq b on a.shopid=b.shopid set a.shopname=b.shopname;
+  update tmp_dayly_sales a join v_goods b on a.goodsid=b.goodsid set a.goodsname=b.name;
+END

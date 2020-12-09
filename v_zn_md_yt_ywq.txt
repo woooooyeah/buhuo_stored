@@ -1,0 +1,70 @@
+SELECT
+	8001 AS `ywqid`,
+	'河南' AS `ywqname`,
+	`b`.`organ` AS `shopid`,
+	`b`.`name` AS `shopname`,
+	(`b`.`organ` + `b`.`name`) AS `shop`,
+	`b`.`nature` AS `ytid`,
+	(
+		CASE `b`.`nature`
+		WHEN 2 THEN
+			21
+		ELSE
+			11
+		END
+	) AS `shoptype`,
+	(
+		CASE `b`.`state`
+		WHEN - (1) THEN
+			0
+		ELSE
+			1
+		END
+	) AS `zt`,
+	(
+		CASE `b`.`nature`
+		WHEN 4 THEN
+			'大卖场'
+		WHEN 5 THEN
+			'标超'
+		WHEN 1 THEN
+			'配送中心'
+		END
+	) AS `ytname`,
+	(
+		CASE `b`.`nature`
+		WHEN 4 THEN
+			'1大卖场'
+		WHEN 5 THEN
+			'2标超'
+		WHEN 1 THEN
+			'3配送中心'
+		END
+	) AS `yt`,
+	(
+		CASE `b`.`centerid`
+		WHEN 0 THEN
+			`b`.`organ`
+		ELSE
+			`b`.`centerid`
+		END
+	) AS `shopid_hb`,
+	(
+		CASE `b`.`centerid`
+		WHEN 0 THEN
+			concat(`b`.`organ`, `b`.`name`, 'a')
+		ELSE
+			concat(`c`.`organ`, `c`.`name`, 'a')
+		END
+	) AS `shop_hb`
+FROM
+	(
+		`tb_organ` `b`
+		JOIN `tb_organ` `c`
+	)
+WHERE
+	(
+		(`b`.`nature` <> 0)
+		AND (abs(`b`.`state`) = 0)
+		AND (`b`.`centerid` = `c`.`organ`)
+	)

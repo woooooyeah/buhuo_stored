@@ -1,0 +1,446 @@
+BEGIN
+#######---------------------Step3-------------------
+DECLARE today date;
+DECLARE beginOfthisSeason date;
+DECLARE beginOfthisSeasonvachar VARCHAR(255);
+DECLARE endOfthisSeason date;
+DECLARE endOfthisSeasonvachar VARCHAR(255);
+#开始结束日期年份
+DECLARE yearOfthisSeasonbegin VARCHAR(255);
+DECLARE yearOfthisSeasonend VARCHAR(255);
+#######---------------------Step3-------------------
+
+
+DECLARE 3MonthEarlier date;
+
+
+#######---------------------Step3-------------------
+SET today=thisDay;
+SET yearOfthisSeasonbegin=DATE_FORMAT(today,'%Y');
+SET yearOfthisSeasonend=CAST(CAST(yearOfthisSeasonbegin AS SIGNED)+1 AS CHAR(255));
+SET beginOfthisSeasonvachar=CASE WHEN 
+				ISNULL((SELECT zn_season_goods.begindate FROM zn_season_goods WHERE zn_season_goods.begindate<=DATE_FORMAT(today,'%m-%d') AND 
+				zn_season_goods.enddate>DATE_FORMAT(today,'%m-%d') LIMIT 1))=1
+		THEN CONCAT(yearOfthisSeasonbegin,'-',(SELECT zn_season_goods.begindate FROM zn_season_goods ORDER BY zn_season_goods.begindate DESC LIMIT 1))
+		ELSE CONCAT(yearOfthisSeasonbegin,'-',(SELECT zn_season_goods.begindate FROM zn_season_goods WHERE zn_season_goods.begindate<=DATE_FORMAT(today,'%m-%d') AND 
+				zn_season_goods.enddate>DATE_FORMAT(today,'%m-%d') LIMIT 1))
+		END;
+SET endOfthisSeasonvachar=CASE WHEN 
+				ISNULL((SELECT zn_season_goods.begindate FROM zn_season_goods WHERE zn_season_goods.begindate<=DATE_FORMAT(today,'%m-%d') AND 
+				zn_season_goods.enddate>=DATE_FORMAT(today,'%m-%d') LIMIT 1))=1
+		THEN CONCAT(yearOfthisSeasonend,'-',(SELECT zn_season_goods.begindate FROM zn_season_goods ORDER BY zn_season_goods.begindate ASC LIMIT 1))
+		ELSE CONCAT(yearOfthisSeasonbegin,'-',(SELECT zn_season_goods.enddate FROM zn_season_goods WHERE zn_season_goods.begindate<=DATE_FORMAT(today,'%m-%d') AND 
+				zn_season_goods.enddate>=DATE_FORMAT(today,'%m-%d') LIMIT 1))
+		END;
+SET beginOfthisSeason=str_to_date(beginOfthisSeasonvachar,'%Y-%m-%d');
+SET endOfthisSeason=str_to_date(endOfthisSeasonvachar,'%Y-%m-%d');
+#######---------------------Step3-------------------
+
+SET 3MonthEarlier=DATE_SUB(today,INTERVAL 90 DAY);
+
+
+
+#-------------------------------开始补货计算-------------------------
+
+
+
+# -----季节性商品首次补货-----
+# 	Step1 取出zn_goods表中seasontype=1的商品及classtype、minorder、
+# minstock、closeqty、arrdate等，根据补货类别可以取出补货周期、
+#	安全库存天数、到货周期。
+
+DROP TABLE IF EXISTS tmp_season_tmp;
+CREATE TABLE tmp_season_tmp AS
+SELECT 
+zn_goods.goodsid AS goodsid,
+zn_goods.shopid AS shopid,
+zn_goods.classtype AS classtype,
+zn_goods.minorder AS minorder,
+zn_goods.minstock AS minstock,
+zn_goods.closeqty AS closeqty,
+zn_config.weekflag AS weekflag,#补货周期
+zn_config.safedays AS safedays,#安全库存天数
+zn_config.arrivaldays AS arrivaldays,#到货周期
+zn_goods.sdate AS sdate,
+#weekflag需要映射成日数
+# 补货周期转int
+CASE WHEN weekflag=1 THEN 7 
+							WHEN weekflag=2 THEN 14
+							WHEN weekflag=3 THEN 21 ELSE 0 END AS weeks,
+
+#arrdate需要转化为zn_goods的
+zn_goods.sdate+weekflag+safedays AS arrdate
+FROM zn_goods,zn_config
+WHERE zn_goods.shopid=shopId AND zn_config.shopid=shopId AND
+zn_goods.seasontype=1;
+ALTER TABLE tmp_season_tmp ADD INDEX index_1(shopid,goodsid);
+
+# 		Step2 满足以下2个条件进行季节性商品首次季节补货：
+#1：季节性商品季节开始日期>当前日期>季节性商品季节开始日期-30天
+DROP TABLE IF EXISTS tmp_season_tmp2;
+CREATE TABLE tmp_season_tmp2
+    SELECT 
+        `a`.`goodsid` AS `goodsid`,
+        `a`.`shopid` AS `shopid`,
+        `a`.`classtype` AS `classtype`,
+        `a`.`minorder` AS `minorder`,
+        `a`.`minstock` AS `minstock`,
+        `a`.`closeqty` AS `closeqty`,
+        `a`.`weekflag` AS `weekflag`,
+        `a`.`safedays` AS `safedays`,
+        `a`.`arrivaldays` AS `arrivaldays`,
+        `a`.`sdate` AS `sdate`
+    FROM
+        `tmp_season_tmp` `a`,zn_season_goods b 
+		WHERE a.shopid=shopId AND b.shopid=shopId AND a.goodsid=b.goodsid AND 
+		b.begindate>DATE_FORMAT(3MonthEarlier,'%m-%d') AND b.begindate<DATE_FORMAT(today,'%m-%d');
+
+#2：没有进行过首次补货：zn_season_across没有这条商品记录
+DELETE x FROM tmp_season_tmp2 x,zn_season_across y
+WHERE x.shopid=shopId AND y.shopid=shopId AND
+x.goodsid=y.goodsid;
+
+#			Step3 确定首次补货量：
+#理论补货量=该商品前三年季节期间日销量的平均值*2周 - 当前库存
+#理论补货量<最小订货量时不需要补货，否则需要补货。
+#实际补货数量=（（理论补货量/最小起订量）向上取整）*最小起订量。
+#更新zn_goods表qty、flag、sdate字段;
+##Step3-1 前一年季节期间日销量的平均值
+DROP TABLE IF EXISTS 3YearsSeasonAverage;
+CREATE TABLE 3YearsSeasonAverage AS
+SELECT 
+zn_dayly_sales.goodsid,
+zn_dayly_sales.shopid,
+AVG(zn_dayly_sales.salevalue) AS avg
+FROM zn_dayly_sales,tmp_season_tmp
+WHERE zn_dayly_sales.shopid=shopId AND
+tmp_season_tmp.shopid=shopId AND
+zn_dayly_sales.goodsid=tmp_season_tmp.goodsid AND 
+zn_dayly_sales.sdate>=beginOfthisSeason AND
+zn_dayly_sales.sdate<endOfthisSeason;
+
+##Step3-2
+DROP TABLE IF EXISTS theoriticQty;
+CREATE TABLE theoriticQty 
+SELECT 
+a.goodsid AS goodsid,
+a.goodsid AS goodsidid,
+a.shopid AS shopid,
+(SELECT 3YearsSeasonAverage.avg
+FROM 3YearsSeasonAverage s,zn_goods
+WHERE s.shopid=shopId AND zn_goods.shopid=shopId AND
+s.goodsid=goodsidid AND zn_goods.goodsid=goodsidid 
+)
+AS theoritic_Qty,
+a.minorder AS minorder,
+0.0 AS actualQty
+FROM zn_goods a;
+
+UPDATE theoriticQty a SET
+a.actualQty=CASE
+	WHEN (a.theoritic_Qty>a.minorder) THEN (CEIL(a.theoritic_Qty/a.minorder)*a.minorder)
+	ELSE 0 END;
+
+#更新zn_goods表qty、flag、sdate字段;qty dec（16，3）default  0 ---计算生成的补货数量
+#flag  char(1)   默认0 ，0—未处理，1---已补货，2---人工补货，3—季节性商品首次补货后在到货之前不在补货。
+UPDATE zn_goods a JOIN theoriticQty b 
+ON a.goodsid=b.goodsid AND 
+a.shopid=b.shopid
+SET 
+a.qty=b.actualQty,
+a.flag=1,
+sdate=today;
+
+#更新zn_season_across表字段
+
+
+
+# 首次发现促销品补货
+# 到zn_goods中取classtype、minorder、minstock、closeqty等，根据补货类别zn_config可以取出补货周期、安全库存天数、到货周期。
+DROP TABLE IF EXISTS dms_tmp;
+CREATE TABLE dms_tmp AS
+SELECT 
+zn_goods.goodsid AS goodsid,
+zn_goods.shopid AS shopid,
+zn_goods.classtype AS classtype,
+zn_goods.minorder AS minorder,
+zn_goods.minstock AS minstock,
+zn_goods.closeqty AS closeqty,
+zn_config.weekflag AS weekflag,#补货周期
+zn_config.safedays AS safedays,#安全库存天数
+zn_config.arrivaldays AS arrivaldays,#到货周期
+zn_goods.sdate,
+#weekflag需要映射成日数
+
+# 补货周期转int
+CASE WHEN weekflag=1 THEN 7 
+							WHEN weekflag=2 THEN 14
+							WHEN weekflag=3 THEN 21 ELSE 0 END AS weeks
+
+#arrdate需要转化为zn_goods的表
+#zn_goods.sdate+weekflag+safedays AS arrdate
+FROM zn_goods LEFT JOIN zn_config
+ON zn_goods.shopid=zn_config.shopid
+WHERE zn_goods.seasontype=1 AND zn_goods.shopid=shopId;
+
+# 到《补货系统促销明细》检查该门店是否有新的促销商品，首次发现促销商品（flag=0）马上触发促销商品的补货
+DROP TABLE IF EXISTS dms_tmp2;
+CREATE TABLE dms_tmp2
+SELECT x.*,
+y.normalprice,
+0.0 AS averageSale,
+0 AS stock
+FROM zn_prom_detail x LEFT JOIN v_zn_goodsshop y
+ON x.shopid=y.shopid AND x.goodsid=y.goodsid
+WHERE x.flag=0;
+##  Todo:更新首次补货记录
+
+# 	取出日均销量
+#	--根据促销价格到zn_price_dms取出这些促销品对应的dms
+UPDATE dms_tmp2 a JOIN zn_price_dms b
+ON (a.goodsid=b.goodsid AND a.shopid=b.shopid)
+SET a.averageSale=b.dms;
+#--如果在zn_price_dms中未找到对应的dms则根据这只单品的定价和取到的促销售价算出促销价所处的折扣段,再到《小类折扣与销量》zn_xl_dms表找到这只单品所属小分类对应的折扣段，对应的dms_disc/dms_ori就是该小分类下在这个折扣段的dms增长率。日均销量=这个dms增长率*这只单品的定价DMS(或者小分类的dms_ori)
+DROP VIEW IF EXISTS v_xl_dms_shop;
+CREATE VIEW v_xl_dms_shop as
+SELECT b.*,c.goodsid FROM zn_xl_dms b join v_goods c on b.xlid=c.deptid;
+
+UPDATE dms_tmp2 a JOIN v_xl_dms_shop b ON a.shopid=b.shopid and a.goodsid=b.goodsid
+SET a.averageSale=b.dms_ori*(SELECT v_xl_dms_shop.dms_disc/v_xl_dms_shop.dms_ori FROM v_xl_dms_shop
+WHERE v_xl_dms_shop.disc1<(a.price/a.normalprice) AND 
+b.disc2>(a.price/a.normalprice));
+
+#--如果在zn_xl_dms中仍然未找到DMS，zn_goods表flag=2 
+
+DROP TEMPORARY TABLE IF EXISTS ttmp_zn_goods;
+CREATE TEMPORARY TABLE ttmp_zn_goods
+SELECT zn_goods.* FROM zn_goods;
+
+DELETE FROM ttmp_zn_goods WHERE id NOT in(SELECT zn_goods.id FROM zn_goods JOIN dms_tmp2 ON zn_goods.goodsid=dms_tmp2.goodsid AND
+zn_goods.shopid=dms_tmp2.shopid WHERE averageSale>0.0);
+
+UPDATE zn_goods SET zn_goods.flag=2
+WHERE zn_goods.id in (SELECT ttmp_zn_goods.id FROM ttmp_zn_goods);
+
+
+
+#c.根据节日属性和季节属性调整日均销量
+#???
+DROP TEMPORARY TABLE IF EXISTS ttmp_dms_tmp;
+CREATE TEMPORARY TABLE ttmp_dms_tmp
+SELECT dms_tmp.goodsid,dms_tmp.shopid FROM dms_tmp;
+DELETE a FROM ttmp_dms_tmp a JOIN zn_goods b 
+ON a.goodsid=b.goodsid AND a.shopid=b.shopid
+WHERE b.holidaytype=2;
+
+
+UPDATE dms_tmp,ttmp_dms_tmp SET weeks=4
+WHERE dms_tmp.goodsid=ttmp_dms_tmp.goodsid;
+
+
+#计算当前可销天数：当前可销天数=当前库存数量/日均销量
+DROP TABLE IF EXISTS dms_tmp3;
+CREATE TABLE dms_tmp3
+SELECT zv_shopsstock.qty AS stock,
+qty/dms_tmp2.averageSale AS saleDays,
+zv_shopsstock.goodsid AS goodsid,
+zv_shopsstock.shopid AS shopid
+FROM zv_shopsstock,dms_tmp2
+WHERE zv_shopsstock.goodsid=dms_tmp2.goodsid AND
+zv_shopsstock.shopid=dms_tmp2.shopid ;
+
+#判断是否需要补货：符合以下两个条件之一时需要补货。
+#（1）当前可销天数<(补货周期+安全库存天数+到货周期)
+#（2）当前库存小于系统设定的最小库存数。
+DROP TABLE IF EXISTS theoriticQty2;
+CREATE TABLE theoriticQty2 
+SELECT 
+a.goodsid AS goodsid,
+a.shopid AS shopid,
+(SELECT CEIL(SUM(s.salevalue)/COUNT(s.salevalue))*14
+FROM zn_dayly_sales s,zn_goods
+WHERE s.goodsid=zn_goods.goodsid AND s.shopid=zn_goods.shopid
+)
+AS theoriticQty,
+a.minorder AS minorder,
+CASE WHEN ((b.saleDays<c.safedays+c.arrivaldays+c.weeks) 
+OR(b.stock<d.minorderqty)) 
+THEN ('1')
+	ELSE '0' END AS ifActualQty,
+0.0 AS actualQty
+FROM zn_goods a ,dms_tmp3 b ,dms_tmp c,zv_minorder d
+WHERE (a.goodsid=b.goodsid AND a.shopid=b.shopid) AND
+(a.goodsid=c.goodsid AND a.shopid=c.shopid) AND
+(a.goodsid=d.goodsid AND a.shopid=d.shopid);
+
+UPDATE theoriticQty2
+SET actualQty=CASE WHEN (ifActualQty='1') 
+THEN (CEIL(theoriticQty/minorder)*minorder)
+	ELSE 0 END
+;
+
+#更新zn_goods表qty、flag、sdate字段;qty dec（16，3）default  0 ---计算生成的补货数量
+#flag  char(1)   默认0 ，0—未处理，1---已补货，2---人工补货，3—季节性商品首次补货后在到货之前不在补货。
+
+UPDATE zn_goods a JOIN theoriticQty b 
+ON a.goodsid=b.goodsid AND 
+a.shopid=b.shopid
+SET 
+a.qty=b.actualQty,
+a.flag=1,
+sdate=today;
+
+# 补货日补货
+
+DROP TEMPORARY TABLE IF EXISTS daily_tmp;
+CREATE TEMPORARY TABLE daily_tmp AS
+SELECT 
+zn_goods.goodsid AS goodsid,
+zn_goods.shopid AS shopid,
+zn_goods.classtype AS classtype,
+zn_goods.minorder AS minorder,
+zn_goods.minstock AS minstock,
+zn_goods.closeqty AS closeqty,
+zn_config.orderdate AS orderdate,
+zn_config.weekflag AS weekflag,#补货周期
+zn_config.safedays AS safedays,#安全库存天数
+zn_config.arrivaldays AS arrivaldays,#到货周期
+zn_goods.sdate,
+#weekflag需要映射成日数
+# 补货周期转int
+CASE WHEN weekflag=1 THEN 7 
+							WHEN weekflag=2 THEN 14
+							WHEN weekflag=3 THEN 21 ELSE 0 END AS weeks,
+zn_goods.normalprice as normalprice
+FROM zn_goods LEFT JOIN zn_config
+ON zn_goods.shopid=zn_config.shopid WHERE zn_goods.flag=0 AND zn_goods.shopid=shopId;
+
+#j. 判断商品是否为订货日，如果是并且zn_goods表中商品flag=0（这一判断确保每个商品一天只进行一次补货）则触发这些商品补货 。
+
+DROP TEMPORARY TABLE IF EXISTS daily_tmp2;
+CREATE TEMPORARY TABLE daily_tmp2 AS
+SELECT 
+goodsid,shopid,classtype,minorder,minstock,
+closeqty,orderdate,weekflag,#补货周期
+safedays,#安全库存天数
+arrivaldays,#到货周期
+sdate,
+weeks,
+normalprice
+FROM daily_tmp WHERE
+(dayofweek(DATE_ADD(curdate(),INTERVAL 2 DAY))-1)=(SELECT LOCATE('1',daily_tmp.orderdate) MOD 7);
+
+
+#k.取出商品在到货时的售价：到《补货系统促销明细》zn_prom_detail中
+#找到flag=2“可以补货”的商品并取出促销售价，当前日期+到货周#期>促销结束日期时应该取商品的正常售价；
+#如果未找到则用zn_goods表中的正常售价normalprice.
+DROP TEMPORARY TABLE IF EXISTS daily_tmp3;
+CREATE TEMPORARY TABLE daily_tmp3 AS
+SELECT daily_tmp2.*,
+0.0 AS averageSale,
+CASE WHEN 
+((DATE_ADD(curdate(),INTERVAL daily_tmp2.weeks DAY))>zn_prom_detail.enddate)
+THEN daily_tmp2.normalprice
+ELSE zn_prom_detail.price END AS finalprice 
+FROM zn_prom_detail,daily_tmp2
+WHERE zn_prom_detail.shopid=daily_tmp2.shopid AND 
+zn_prom_detail.goodsid=daily_tmp2.goodsid AND 
+zn_prom_detail.flag=2;
+
+
+#m. 取出日均销量：
+#	--根据促销价格到zn_price_dms取出这些促销品对应的dms
+UPDATE daily_tmp3 a JOIN zn_price_dms b
+ON (a.goodsid=b.goodsid AND a.shopid=b.shopid)
+SET a.averageSale=b.dms;
+#--如果在zn_price_dms中未找到对应的dms则根据这只单品的定价和取到的促销售价算出促销价所处的折扣段,再到《小类折扣与销量》zn_xl_dms表找到这只单品所属小分类对应的折扣段，对应的dms_disc/dms_ori就是该小分类下在这个折扣段的dms增长率。日均销量=这个dms增长率*这只单品的定价DMS(或者小分类的dms_ori)
+#DROP VIEW IF EXISTS v_xl_dms_shop;
+#CREATE VIEW v_xl_dms_shop as
+#SELECT b.*,c.goodsid FROM zn_xl_dms b join v_goods c on b.xlid=c.deptid;
+
+UPDATE daily_tmp3 a JOIN v_xl_dms_shop b ON a.shopid=b.shopid and a.goodsid=b.goodsid
+SET a.averageSale=b.dms_ori*(SELECT b.dms_disc/b.dms_ori FROM v_xl_dms_shop 
+WHERE b.disc1<(a.finalprice/a.normalprice) AND 
+b.disc2>(a.finalprice/a.normalprice));
+
+#--如果在zn_xl_dms中仍然未找到DMS，zn_goods表flag=2 
+
+DROP TEMPORARY TABLE IF EXISTS ttmp_zn_goods;
+CREATE TEMPORARY TABLE ttmp_zn_goods
+SELECT zn_goods.* FROM zn_goods;
+
+DELETE FROM ttmp_zn_goods WHERE id NOT in(SELECT zn_goods.id FROM zn_goods JOIN daily_tmp3 ON zn_goods.goodsid=daily_tmp3.goodsid AND
+zn_goods.shopid=daily_tmp3.shopid WHERE averageSale>0.0);
+
+UPDATE zn_goods SET zn_goods.flag=2
+WHERE zn_goods.id in (SELECT ttmp_zn_goods.id FROM ttmp_zn_goods);
+
+
+
+#c.根据节日属性和季节属性调整日均销量
+#???
+DROP TEMPORARY TABLE IF EXISTS ttmp_dms_tmp;
+CREATE TEMPORARY TABLE ttmp_dms_tmp
+SELECT daily_tmp3.goodsid,daily_tmp3.shopid FROM daily_tmp3;
+DELETE a FROM ttmp_dms_tmp a JOIN zn_goods b 
+ON a.goodsid=b.goodsid AND a.shopid=b.shopid
+WHERE b.holidaytype=2;
+
+
+UPDATE daily_tmp3,ttmp_dms_tmp SET daily_tmp3.weeks=4
+WHERE daily_tmp3.goodsid=ttmp_dms_tmp.goodsid;
+
+
+#计算当前可销天数：当前可销天数=当前库存数量/日均销量
+DROP TABLE IF EXISTS daily_tmp4;
+CREATE TABLE daily_tmp4
+SELECT zv_shopsstock.qty AS stock,
+qty/daily_tmp3.averageSale AS saleDays,
+zv_shopsstock.goodsid AS goodsid,
+zv_shopsstock.shopid AS shopid
+FROM zv_shopsstock,daily_tmp3
+WHERE zv_shopsstock.goodsid=daily_tmp3.goodsid AND
+zv_shopsstock.shopid=daily_tmp3.shopid ;
+
+#判断是否需要补货：符合以下两个条件之一时需要补货。
+#（1）当前可销天数<(补货周期+安全库存天数+到货周期)
+#（2）当前库存小于系统设定的最小库存数。
+DROP TABLE IF EXISTS theoriticQty2;
+CREATE TABLE theoriticQty2 
+SELECT 
+a.goodsid AS goodsid,
+a.shopid AS shopid,
+(SELECT CEIL(SUM(s.salevalue)/COUNT(s.salevalue))*14
+FROM zn_dayly_sales s,zn_goods
+WHERE s.goodsid=zn_goods.goodsid AND s.shopid=zn_goods.shopid
+)
+AS theoriticQty,
+a.minorder AS minorder,
+CASE WHEN ((b.saleDays<c.safedays+c.arrivaldays+c.weeks) 
+OR(b.stock<d.minorderqty)) 
+THEN ('1')
+	ELSE '0' END AS ifActualQty,
+0.0 AS actualQty
+FROM zn_goods a ,daily_tmp4 b ,daily_tmp3 c,zv_minorder d
+WHERE (a.goodsid=b.goodsid AND a.shopid=b.shopid) AND
+(a.goodsid=c.goodsid AND a.shopid=c.shopid) AND
+(a.goodsid=d.goodsid AND a.shopid=d.shopid);
+
+UPDATE theoriticQty2
+SET actualQty=CASE WHEN (ifActualQty='1') 
+THEN (CEIL(theoriticQty/minorder)*minorder)
+ELSE 0 END;
+
+#更新zn_goods表qty、flag、sdate字段;qty dec（16，3）default  0 ---计算生成的补货数量
+#flag  char(1)   默认0 ，0—未处理，1---已补货，2---人工补货，3—季节性商品首次补货后在到货之前不在补货。
+
+UPDATE zn_goods a JOIN theoriticQty2 b 
+ON a.goodsid=b.goodsid AND 
+a.shopid=b.shopid
+SET 
+a.qty=b.actualQty,
+a.flag=1,
+sdate=today;
+
+
+END
