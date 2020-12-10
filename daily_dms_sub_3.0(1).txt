@@ -1,67 +1,103 @@
 BEGIN
-DROP TABLE IF EXISTS tmptable_everyday_1_1;
-CREATE TABLE tmptable_everyday_1_1 AS
-SELECT sdate,shopid,goodsid,SUM(amount)AS amount,SUM(salevalue)AS salevalue,
-salevalue/amount as average_price,
- floor(salevalue/amount /(SELECT v_goodsshop.normalprice 
-FROM v_goodsshop where pos_2w.shopid=v_goodsshop.shopid 
-and pos_2w.goodsid=v_goodsshop.goodsid )*20)/20 as zkb
-FROM pos_2w WHERE v_goodsshop.shopid=shopId AND sdate=thisDay
-GROUP BY sdate, shopid, goodsid;
+DECLARE 2WeeksBefore date;
+DECLARE today date;
+
+SET today=thisDay;
+SET 2WeeksBefore=DATE_SUB(today,INTERVAL 15 DAY);
+
+#CALL proc_tmpdayly(DATE_SUB(thisDay,INTERVAL 2 DAY),thisDay);
+
+####a. 用zn_daly_sales近2周数据计算正常售价（zlprice/normalprice>=0.95）的日均销量=2周正常售价销售数量/（14-促销有销售周天数ruhepanduan）。
+    DROP TABLE IF EXISTS tmp_everyday_dms_1;
+		CREATE TABLE tmp_everyday_dms_1 AS
+		SELECT 
+        `a`.`shopid` AS `shopid`,
+        `a`.`goodsid` AS `goodsid`,
+        SUM(`a`.`qty`)/(14-COUNT(IF(`a`.`zlprice`/a.normalprice<0.95,1,0))) AS `dms`,
+				SUM(`a`.salevalue)/SUM(`a`.qty) AS `trueprice`,##############
+        `a`.`normalprice` AS `normalprice`,
+        `a`.`zlprice` AS `zlprice`
+    FROM
+        `zn_dayly_sales` `a`
+		WHERE a.shopid=shopId AND (a.zlprice/a.normalprice>=0.95)
+		GROUP BY a.goodsid;
+
+####更新zn_price_dms中正常售价对应的dms
+		REPLACE INTO zn_price_dms (shopid,shopname,xlid,xlname,goodsid,
+        goodsname,normalprice,band1,band2,disc1,disc2,trueprice,
+        dms,sdate)
+		SELECT
+        `b`.`shopid` AS `shopid`,
+        `c`.`shopname` AS `shopname`,
+        `d`.`deptid` AS `xlid`,
+        `e`.`xlname` AS `xlname`,
+        `b`.`goodsid` AS `goodsid`,
+        `d`.`name` AS `goodsname`,
+        `b`.`normalprice` AS `normalprice`,
+        18 AS `band1`,
+        20 AS `band2`,
+        FLOOR(b.zlprice/b.normalprice*100) AS `disc1`,
+        CEILING(b.zlprice/b.normalprice*100) AS `disc2`,
+        `b`.`trueprice` AS `trueprice`, # take ??? as trueprice
+        `b`.`dms` AS `dms`,
+				thisDay AS `sdate`
+		FROM tmp_everyday_dms_1 b,v_zn_md_yt_ywq c,v_goods d,v_zn_cg_dl_zl_xl e
+		WHERE b.shopid=shopId AND c.shopid=shopId AND b.goodsid=d.goodsid AND d.deptid=e.xlid;
+		
+#b. 用zn_daly_sales n周（与促销周期一致）数据计算zn_prom_detail_tmp表中的促销刚刚结束的促销品的日均销量=促销周期内销售数量/促销周期。
+		UPDATE `zn_prom_detail_tmp` `f`,`zn_dayly_sales`.`g`
+		SET f.totalQty=f.totalQty+g.qty
+		WHERE f.shopid=shopId AND g.shopid=shopId AND f.goodsid=g.goodsid AND 
+					f.enddate>today AND g.sdate=today;
+		
+
+
+####更新或新增zn_price_dms中促销售价对应的dms
+		REPLACE INTO zn_price_dms (shopid,shopname,xlid,xlname,goodsid,
+        goodsname,normalprice,band1,band2,disc1,disc2,trueprice,
+        dms,sdate)
+		SELECT
+        `b`.`shopid` AS `shopid`,
+        `c`.`shopname` AS `shopname`,
+        `d`.`deptid` AS `xlid`,
+        `e`.`xlname` AS `xlname`,
+        `b`.`goodsid` AS `goodsid`,
+        `d`.`name` AS `goodsname`,
+        `f`.`normalprice` AS `normalprice`,
+        getZkb(`b`.`price`,`f`.`normalprice`)*20 AS `band1`,
+        CASE WHEN (a.getZkb(`b`.`price`,`f`.`normalprice`)*20<18) THEN a.getZkb(`b`.`price`,`f`.`normalprice`)*20+1
+												ELSE a.getZkb(`b`.`price`,`f`.`normalprice`)*20+2 END AS band2,
+        FLOOR(b.zlprice/b.normalprice*100) AS `disc1`,
+        CEILING(b.zlprice/b.normalprice*100) AS `disc2`,
+        `b`.`trueprice` AS `trueprice`, # take ??? as trueprice
+        `b`.`dms` AS `dms`,
+				thisDay AS `sdate`
+		FROM zn_prom_detail_tmp b,v_zn_md_yt_ywq c,v_goods d,v_zn_cg_dl_zl_xl e,v_zn_goodsshop f
+		WHERE b.shopid=shopId AND b.enddate<=today AND c.shopid=shopId AND f.shopid=shopId AND b.goodsid=d.goodsid AND d.deptid=e.xlid AND b.goodsid=f.goodsid;
+
+# c.根据zn_price_dms表更新zn_xl_dms
 
 
 
-##################
-DROP TABLE IF EXISTS tmptable_everyday_2_1;
-CREATE TABLE tmptable_everyday_2_1 AS
-SELECT tmptable_everyday_1_1.shopid AS shopid, tmptable_everyday_1_1.goodsid AS goodsid,
-tmptable_everyday_1_1.zkb AS zkb,SUM(tmptable_everyday_1_1.amount) AS amount ,
-SUM(tmptable_everyday_1_1.salevalue) AS salevalue,
-salevalue/amount AS average_price,
-amount/count(tmptable_everyday_1_1.amount) AS dms 
-FROM tmptable_everyday_1_1
-GROUP BY  tmptable_everyday_1_1.shopid, tmptable_everyday_1_1.goodsid,tmptable_everyday_1_1.zkb;
+#d.促销明细中间表zn_prom_detail_tmp表插入促销明细历史表zn_prom_detail_his后将中间表删除。
+		INSERT INTO zn_prom_detail_his(planid,planname,enddate,shopid,goodsid,price,planqty,flag,begindate,sdate,totalQty)
+    SELECT 
+        `zn_prom_detail_tmp`.`id` AS `id`,
+        `zn_prom_detail_tmp`.`planid` AS `planid`,
+        `zn_prom_detail_tmp`.`planname` AS `planname`,
+        `zn_prom_detail_tmp`.`enddate` AS `enddate`,
+        `zn_prom_detail_tmp`.`shopid` AS `shopid`,
+        `zn_prom_detail_tmp`.`goodsid` AS `goodsid`,
+        `zn_prom_detail_tmp`.`price` AS `price`,
+        `zn_prom_detail_tmp`.`planqty` AS `planqty`,
+        `zn_prom_detail_tmp`.`flag` AS `flag`,
+        `zn_prom_detail_tmp`.`begindate` AS `begindate`,
+        `zn_prom_detail_tmp`.`sdate` AS `sdate`,
+        `zn_prom_detail_tmp`.`totalQty` AS `totalQty`
+    FROM
+        `zn_prom_detail_tmp` WHERE zn_prom_detail_tmp.sdate<=today;
 
-
-
-REPLACE INTO zn_price_dms(shopid,xlid,goodsid,normalprice,band1,band2,disc1,disc2,trueprice,dms,sdate)
-SELECT shopid,goodsid,(SELECT deptid FROM v_goods WHERE zn_price_dms.goodsid=v_goods.goodsid)as xlid,
-(SELECT `price` 
-FROM tb_comm_shop where shopid=tb_comm_shop.organ 
-and goodsid=tb_comm_shop.`code`)AS normalprice,
-zkb AS disc1,zkb+0.05 AS disc2,zkb*normalprice AS band1,
-disc2*normalprice AS band2,average_price AS trueprice,dms
-FROM tmptable_everyday_2_1;
-
-
-#c.根据zn_price_dms表更新zn_xl_dms
-DROP TABLE IF EXISTS tmp_everyday_xl;
-CREATE TABLE tmp_everyday_xl
-SELECT 
-zn_price_dms.shopid AS shopid,
-zn_price_dms.xlid AS xlid,
-zn_price_dms.disc1 AS disc1,
-zn_price_dms.disc2 AS disc2,
-SUM(zn_price_dms.dms) AS dms,
-SUM(zn_price_dms.dms)/COUNT(zn_price_dms.dms) AS dms_disc,
-0.0 AS dms_ori 
-FROM zn_price_dms
-GROUP BY zn_price_dms.shopid,zn_price_dms.xlid,zn_price_dms.disc1,zn_price_dms.disc2;
-
-
-#########mds_ori 小类在原价销售时单品的日均销量/小类单品数????
-UPDATE tmp_everyday_xl a
-SET a.dms_ori=(SELECT dms_disc FROM tmp_everyday_xl b WHERE 
-a.xlid=b.xlid AND
-a.shopid=b.shopid AND 
-b.disc2>0.99);
-
-REPLACE INTO zn_xl_dms(shopid,xlid,dsic1,disc2,dms_ori)
-SELECT shopid,xlid,dsic1,disc2,dms_ori
-FROM tmp_everyday_xl;
-
-
-DROP TABLE IF EXISTS tmp_everyday_xl;
+		DELETE FROM zn_prom_detail_tmp WHERE zn_prom_detail_tmp.sdate<=today;
 
 
 END
