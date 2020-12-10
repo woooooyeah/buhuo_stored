@@ -1,0 +1,9 @@
+getZkb
+参数 `a` decimal,`b` decimal
+返回 decimal(16,2)
+
+BEGIN
+	#Routine body goes here...
+	IF (a/b<0.9) THEN RETURN FLOOR(a/b);
+	ELSE RETURN 0.9; END IF;
+END
