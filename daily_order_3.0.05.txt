@@ -179,20 +179,18 @@ CASE WHEN weekflag=1 THEN 7
 
 #arrdate需要转化为zn_goods的表
 #zn_goods.sdate+weekflag+safedays AS arrdate
-FROM zn_goods LEFT JOIN zn_config
-ON zn_goods.shopid=zn_config.shopid
-WHERE zn_goods.seasontype=1 AND zn_goods.shopid=shopId;
+FROM zn_goods, zn_config
+WHERE zn_goods.shopid=shopId AND zn_config.shopid=shopId AND
+zn_goods.seasontype=1;
 
 # 到《补货系统促销明细》检查该门店是否有新的促销商品，首次发现促销商品（flag=0）马上触发促销商品的补货
 DROP TABLE IF EXISTS dms_tmp2;
 CREATE TABLE dms_tmp2
 SELECT x.*,
-y.normalprice,
 0.0 AS averageSale,
 0 AS stock
-FROM zn_prom_detail x LEFT JOIN v_zn_goodsshop y
-ON x.shopid=y.shopid AND x.goodsid=y.goodsid
-WHERE x.flag=0;
+FROM zn_prom_detail x
+WHERE x.shopid=shopId AND x.flag=0;
 ##  Todo:更新首次补货记录
 
 # 	取出日均销量
