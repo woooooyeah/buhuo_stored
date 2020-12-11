@@ -1,0 +1,33 @@
+BEGIN
+	DECLARE s int DEFAULT 0;
+  DECLARE shopId varchar(255);
+	DECLARE hasData int;
+	DECLARE amount int;
+    -- 定义游标，并将sql结果集赋值到游标中
+  DECLARE report CURSOR FOR select v_zn_md_yt_ywq.shopid from v_zn_md_yt_ywq;
+    -- 声明当游标遍历完后将标志变量置成某个值
+  DECLARE CONTINUE HANDLER FOR NOT FOUND SET s=1;
+
+	SELECT COUNT(v_zn_md_yt_ywq.shopid) INTO amount FROM v_zn_md_yt_ywq;
+    -- 打开游标
+    open report;
+ 
+        -- 将游标中的值赋值给变量，注意：变量名不要和返回的列名同名，变量顺序要和sql结果列的顺序一致
+        fetch report into shopId;
+ 
+        -- 当s不等于1，也就是未遍历完时，会一直循环
+        loop1:while amount<>1 do
+            -- 执行业务逻辑	
+					SET amount=amount-1;
+
+					CALL shopHasData(shopId,thisDay,hasData);
+					SELECT hasData;
+					IF (hasData=1) THEN CALL everyday_sub(shopId,thisDay);
+					END IF;
+        -- 当s等于1时表明遍历以完成，退出循环
+          fetch report into shopId;
+        end while loop1;
+    -- 关闭游标
+    close report;
+
+END
