@@ -1,0 +1,23 @@
+CREATE TABLE IF NOT EXISTS `tmp_season_tmp` (
+  `goodsid` varchar(32) CHARACTER SET utf8mb4 DEFAULT NULL COMMENT '商品编码',
+  `shopid` varchar(8) CHARACTER SET utf8mb4 DEFAULT NULL COMMENT '门店编码',
+  `classtype` varchar(1) CHARACTER SET utf8mb4 DEFAULT NULL COMMENT '补货类型',
+  `minorder` decimal(16,2) DEFAULT NULL COMMENT '最小起订量',
+  `minstock` decimal(16,2) DEFAULT NULL COMMENT '最小库存数量',
+  `closeqty` decimal(16,3) DEFAULT NULL COMMENT '昨日日终库存数量',
+  `weekflag` char(1) CHARACTER SET utf8 DEFAULT NULL,
+  `safedays` int(11) DEFAULT NULL,
+  `arrivaldays` int(11) DEFAULT NULL,
+  `sdate` datetime DEFAULT NULL COMMENT '更新日期时间',
+  `theoritical_qty` decimal(16,2) DEFAULT NULL,
+  `actual_qty` decimal(16,2) DEFAULT NULL,
+  KEY `index_1` (`goodsid`,`shopid`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `3yearsseasonaverage` (
+  `goodsid` varchar(32) DEFAULT NULL COMMENT '商品编码',
+  `shopid` varchar(8) DEFAULT NULL COMMENT '门店编码',
+  `avg` decimal(20,6) DEFAULT NULL,
+  KEY `idx_3yearsseasonaverage_goodsid` (`goodsid`),
+  KEY `idx_3yearsseasonaverage_shopid` (`shopid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

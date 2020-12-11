@@ -1,2 +1,3 @@
 ALTER TABLE `jeecg-boot`.`zn_prom_detail_tmp` 
 ADD COLUMN `totalQty` DECIMAL(16,2) NULL COMMENT '销售数量累计' AFTER `sdate`;
+
