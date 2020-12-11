@@ -1,7 +1,3 @@
-IN `shopId` varchar(255),IN `thisDay` date
-
-
-
 BEGIN
 
 DECLARE springFesitvalBegin date;
@@ -20,53 +16,6 @@ SET springFestivalEnd=(SELECT zn_calendar.enddate FROM zn_calendar WHERE zn_cale
 #a0.判断zn_price_dms正常售价+是否变化：zn_goods中的normal是最新的正常售价。
 #如果正常售价变化要更新，价格段也要随之进行调整。
 
-CREATE TABLE tmp_everyday_dms_1 AS
-SELECT 
-zn_price_dms.disc1*zn_goods.normalprice AS band1,
-zn_price_dms.disc2*zn_goods.normalprice AS band2,
-zn_price_dms.disc1 AS disc1,
-zn_price_dms.disc2 AS disc2,
-zn_price_dms.dms AS dms,
-zn_price_dms.goodsid AS goodsid,
-zn_goods.normalprice AS normalprice,
-zn_price_dms.sdate AS sdate,
-zn_price_dms.shopid AS shopid,
-zn_price_dms.trueprice AS trueprice,
-zn_price_dms.xlid AS xlid 
-FROM zn_price_dms, zn_goods WHERE 
-zn_price_dms.shopid=shopId AND zn_goods.shopid=shopId AND
-zn_price_dms.goodsid=zn_goods.goodsid AND zn_price_dms.normalprice<>zn_goods.normalprice;
-
-UPDATE tmp_everyday_dms_1,zn_price_dms 
-SET
-tmp_everyday_dms_1.dms=zn_price_dms.dms,
-tmp_everyday_dms_1.trueprice=zn_price_dms.trueprice
-WHERE tmp_everyday_dms_1.shopid=shopId AND zn_price_dms.shopid=shopId AND
-tmp_everyday_dms_1.goodsid=zn_price_dms.goodsid AND
-tmp_everyday_dms_1.sdate=zn_price_dms.sdate AND
-tmp_everyday_dms_1.xlid=zn_price_dms.xlid AND
-zn_price_dms.trueprice>=tmp_everyday_dms_1.band1 AND
-zn_price_dms.trueprice<tmp_everyday_dms_1.band2;
-
-UPDATE zn_price_dms,tmp_everyday_dms_1
-SET
-zn_price_dms.band1=tmp_everyday_dms_1.band1,
-zn_price_dms.band2=tmp_everyday_dms_1.band2,
-zn_price_dms.disc1=tmp_everyday_dms_1.disc1,
-zn_price_dms.disc2=tmp_everyday_dms_1.disc2,
-zn_price_dms.dms=tmp_everyday_dms_1.dms,
-zn_price_dms.goodsid=tmp_everyday_dms_1.goodsid,
-zn_price_dms.normalprice=tmp_everyday_dms_1.normalprice,
-zn_price_dms.sdate=tmp_everyday_dms_1.sdate,
-zn_price_dms.shopid=tmp_everyday_dms_1.shopid,
-zn_price_dms.trueprice=tmp_everyday_dms_1.trueprice,
-zn_price_dms.xlid=tmp_everyday_dms_1 .xlid
-WHERE
-tmp_everyday_dms_1.shopid=shopId AND zn_price_dms.shopid=shopId AND
-tmp_everyday_dms_1.goodsid=zn_price_dms.goodsid AND
-tmp_everyday_dms_1.sdate=zn_price_dms.sdate AND
-tmp_everyday_dms_1.xlid=zn_price_dms.xlid AND
-tmp_everyday_dms_1.disc1=zn_price_dms.zn_price_dms;
 
 
 #a1 春节期间所有商品在节日期间停止更新dms
