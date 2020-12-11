@@ -1,0 +1,7 @@
+BEGIN
+	DELETE FROM zn_log 
+	WHERE zn_log.sundate=thisDay AND zn_log.shopid=shopId;
+
+	INSERT INTO zn_log(sundate,shopid,flag,enddatedate)
+				VALUES (thisDay,shopId,1,CURRENT_DATE());
+END
