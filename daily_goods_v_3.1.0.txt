@@ -12,7 +12,7 @@ SET springfestivalbegin=DATE_SUB(
 (SELECT zn_calendar.startdate FROM zn_calendar WHERE holidayid='01' AND DATE_FORMAT(zn_calendar.startdate,'%Y')=YEAR(today)),
 INTERVAL 6 DAY);
 SET chuyi=
-(SELECT zn_calendar.sundatedate FROM zn_calendar WHERE holidayid='01' AND DATE_FORMAT(zn_calendar.startdate,'%Y')=YEAR(today));
+(SELECT zn_calendar.sundate FROM zn_calendar WHERE holidayid='01' AND DATE_FORMAT(zn_calendar.startdate,'%Y')=YEAR(today));
 
 #将v_goods和v_zn_goodsshop 转成表
 #DROP TABLE IF EXISTS tmp_everyday_v_goods;
